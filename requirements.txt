@@ -1,0 +1,9 @@
+einops
+matplotlib
+numpy
+pandas
+sae-lens
+scikit-learn
+seaborn
+transformers
+tqdm
