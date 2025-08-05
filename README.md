@@ -25,6 +25,7 @@ These SAEs can be downloaded from: https://huggingface.co/danf0/attention-head-s
 
 Code for generating datasets of feature activations can be found in [src/get_exemplars.py](src/get_exemplars.py).
 See [scripts/generate_data.sh](scripts/generate_data.sh) for the command to generate the datasets used in our paper, which are based on [OpenWebText](https://huggingface.co/datasets/Skylion007/openwebtext).
+The feature datasets used in this paper can be downloaded directly from HuggingFace via [this link](https://huggingface.co/danf0/attention-head-saes/resolve/main/exemplars.tar.gz).
 
 ## Rule extraction
 

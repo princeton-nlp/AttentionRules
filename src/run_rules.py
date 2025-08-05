@@ -106,7 +106,12 @@ def load_examples(example_dir, layer, head):
     for split_fn in split_fns:
         with open(split_fn, "r") as f:
             examples = json.load(f)
-        splits.append(pd.DataFrame(examples))
+        df = pd.DataFrame(examples)
+        if "act_max" not in df.columns:
+            df["act_max"] = df["act"]
+        if "act_argmax" not in df.columns:
+            df["act_argmax"] = df["position"]
+        splits.append(df)
     return splits
 
 
@@ -178,11 +183,13 @@ def get_interactions_for_feature(
 
 
 def precision(row):
+    # If there are no positive predictions, define precision = 1.
     if row["TP"] + row["FP"] == 0:
         return 1
     return row["TP"] / (row["TP"] + row["FP"])
 
 def recall(row):
+    # If there are no positive examples, define recall = 1.
     if row["TP"] + row["FN"] == 0:
         return 1
     return row["TP"] / (row["TP"] + row["FN"])
@@ -197,7 +204,10 @@ def add_binary_score(df, threshold=0):
     metrics = df[["is_active", "predicted_active", "TP", "FP", "FN"]].sum().to_dict()
     metrics["precision"] = precision(metrics)
     metrics["recall"] = recall(metrics)
-    metrics["f1"] = 2 * metrics["precision"] * metrics["recall"] / (metrics["precision"] + metrics["recall"])
+    if metrics["precision"] + metrics["recall"] == 0:
+        metrics["f1"] = 0
+    else:
+        metrics["f1"] = 2 * metrics["precision"] * metrics["recall"] / (metrics["precision"] + metrics["recall"])
     return df, metrics
 
 
@@ -255,6 +265,19 @@ def run_rule_for_feature(
             explain_df=explain_df,
             negative_values=negative_values,
         )
+    elif method == "unigram":
+        rule_df = rule_utils.get_unigrams_by_magnitude(
+            feat=feat,
+            sae_in=sae_in,
+            sae_out=sae_out,
+            model=model,
+            num_values=num_values,
+            explain_df=explain_df,
+            head=head,
+            layer=layer,
+            negative_values=negative_values,
+        )
+        rule_df = rule_df.sort_values(by="score", ascending=False)
     else:
         raise NotImplementedError(method)
 
@@ -287,6 +310,8 @@ def run_rule_for_feature(
                 num_interactions=k,
                 absolute=absolute,
             )
+        elif method == "unigram":
+            rule = rule_utils.UnigramRule(rule_df.nlargest(k, ["score"]), feat)
         else:
             raise NotImplementedError(method)
         df = rule_utils.run_eval(
@@ -321,7 +346,7 @@ def run_rule_for_feature(
         )
         corr.append(metrics)
 
-    if method == "magnitude":
+    if method in ("magnitude", "unigram"):
         rule_df = rule_df.nlargest(ks[-1], ["score"])
     elif method == "importance":
         rule_df = rule.get_rule_df(explain_df)

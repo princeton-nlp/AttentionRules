@@ -87,7 +87,7 @@ def prepare_df(df, prefix_only=False, max_acts_only=True):
 
 
 def bin_activations(
-    activation_df, num_bins=5, examples_per_bin=30, min_count=6, seed=0
+    activation_df, num_bins=5, examples_per_bin=30, min_count=6, seed=0, max_length=64
 ):
     activation_df["bin"], bins = pd.cut(
         activation_df["act_max"], bins=num_bins, labels=False, retbins=True
@@ -103,9 +103,12 @@ def bin_activations(
             continue
         if len(bin_df) < examples_per_bin:
             logger.info(f"Warning: bin {bin} has size {len(bin_df)} < {examples_per_bin}")
-        out.append(
-            bin_df.sample(n=min(examples_per_bin, len(bin_df)), random_state=seed)
-        )
+        d = bin_df.sample(n=min(examples_per_bin, len(bin_df)), random_state=seed)
+        # If act_max is 0, act_argmax will usually be 0, so evaluate random positions instead.
+        new_pos = np.random.randint(1, max_length, size=len(d))
+        cur_pos = d["act_argmax"]
+        d["act_argmax"] = np.where(cur_pos > 0, cur_pos, new_pos)
+        out.append(d)
     df = pd.concat(out)
     return df, bins
 
@@ -119,6 +122,34 @@ def get_positive_and_negative_examples(
         if activation_df.iloc[i]["act_max"] > 0:
             bins[i] = 1
     activation_df["bin"] = bins
+    bins = [0, 1]
+    out = []
+    for bin in bins:
+        bin_df = activation_df.query(f"bin == {bin}")
+        if len(bin_df) == 0:
+            logger.info(f"Warning: bin {bin} is empty")
+            continue
+        if len(bin_df) < min_count:
+            logger.info(f"Warning: bin {bin} has size {len(bin_df)} < {min_count}, skipping")
+            continue
+        if len(bin_df) < examples_per_bin:
+            logger.info(f"Warning: bin {bin} has size {len(bin_df)} < {examples_per_bin}")
+        d = bin_df.sample(n=min(examples_per_bin, len(bin_df)), random_state=seed)
+        # If bin is 0, act_argmax will always be 0, so sample random positions to evaluate here.
+        if bin == 0:
+            d["act_argmax"] = np.random.randint(1, max_length, size=len(d))
+        out.append(d)
+    if len(out) != 2:
+        logger.info(f"Not enough examples for all bins")
+        return None, None
+    df = pd.concat(out)
+    return df, bins
+
+
+def sample_positive_and_negative_examples(
+    activation_df, examples_per_bin=30, min_count=6, seed=0, max_length=64,
+):
+    activation_df["bin"] = (activation_df["act_max"] > 0).astype(int).to_numpy()
     bins = [0, 1]
     out = []
     for bin in bins:

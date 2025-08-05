@@ -140,6 +140,49 @@ def get_skipgram_interaction_importance(
     )
 
 
+def get_unigrams_by_magnitude(
+    feat,
+    sae_in,
+    sae_out,
+    model,
+    layer=0,
+    head=2,
+    num_values=10,
+    explain_df=None,
+    negative_values=False,
+):
+    W_enc = sae_out.W_enc
+    if len(W_enc.shape) == 3:
+        # Not a per-head SAE.
+        W_enc = W_enc.view(12, 64, -1)[head]
+
+    W_V = model.blocks[layer].attn.W_V[head]
+    W_dec = sae_in.W_dec
+    D_V = W_dec @ W_V
+
+    # Get input features with max scoring values
+    feat_emb = W_enc[:, feat]
+    scores = D_V @ feat_emb
+    if negative_values:
+        scores = torch.abs(scores)
+    _, top_values = torch.topk(scores, k=num_values, largest=True)
+
+    # Make a list
+    lst = []
+    for i, v_idx in enumerate(top_values):
+        d = {
+            "value": v_idx.item(),
+            "value_score": scores[v_idx].item(),
+        }
+        # Heuristic score
+        d["score"] = d["value_score"]
+        lst.append(d)
+
+    rules = pd.DataFrame(lst)
+    if explain_df is not None:
+        rules["value_desc"] = [explain(f, explain_df) for f in rules["value"]]
+    return rules
+
 
 
 def get_all_activations(
@@ -488,11 +531,13 @@ class SkipgramRule:
                         "k": k_feat,
                         "q_act": feature_acts[pos, q_feat].item(),
                         "k_act": feature_acts[k_pos, k_feat].item(),
+                        "kind": "kq",
                     }
                     d.update(ks[k_feat])
                     d["predicted_score"] = (
                         d["q_act"] * d["k_act"] * d["attn_score"]
                     ) * (d["k_act"] * d["value_score"])
+                    d["predicted_kv_score"] = d["predicted_score"]
                     lst.append(d)
         if len(lst) == 0:
             lst = [
@@ -501,6 +546,8 @@ class SkipgramRule:
                     "k_pos": pos,
                     "q_token": tokens[pos],
                     "predicted_score": 0,
+                    "predicted_kv_score": 0,
+                    "kind": "kq",
                 }
             ]
         return pd.DataFrame(lst)
@@ -516,6 +563,51 @@ class SkipgramRule:
         scores = scores.masked_fill(mask, 0)
         max_score = scores.view(n, -1).max(-1)
         return max_score
+
+
+class UnigramRule:
+    def __init__(
+        self, rule_df, feat=None, any_position=False, device=torch.device("cuda")
+    ):
+        self.feat = feat
+        self.rule_df = rule_df
+        self.value_idxs = rule_df["value"].unique()
+        self.scores = None
+        self.values = {}
+        for _, row in rule_df.iterrows():
+            self.values[row["value"]] = row["score"]
+        self.any_position = any_position
+
+
+    def eval_at_position(self, tokens, feature_acts, pos):
+        all_feats = feature_acts[: pos + 1].nonzero().cpu().tolist()
+        lst = []
+        for k_pos, k_feat in all_feats:
+            if k_feat in self.values:
+                d = {
+                    "q_pos": pos,
+                    "k_pos": k_pos,
+                    "q_token": tokens[pos],
+                    "k_token": tokens[k_pos],
+                    "k": k_feat,
+                    "k_act": feature_acts[k_pos, k_feat].item(),
+                    "value_score": self.values[k_feat],
+                    "kind": "value",
+                    "score": self.values[k_feat],
+                }
+                d["predicted_score"] = d["k_act"] * d["value_score"]
+                lst.append(d)
+        if len(lst) == 0:
+            lst = [
+                {
+                    "q_pos": pos,
+                    "k_pos": pos,
+                    "q_token": tokens[pos],
+                    "kind": "value",
+                    "predicted_score": 0,
+                }
+            ]
+        return pd.DataFrame(lst)
 
 
 def patch_hook(activation, hook, patch):
@@ -1405,6 +1497,12 @@ def aggregate_predictions(binned_idxs, df, aggregation_type="max"):
         )
     if aggregation_type == "value_max":
         df = df.query("kind == 'value'")
+        return binned_idxs.join(
+            df.groupby("row_idx")[["predicted_score"]].max(),
+            on="row_idx",
+        )
+    if aggregation_type == "value_last":
+        df = df.query("kind == 'value' & (q_pos == k_pos)")
         return binned_idxs.join(
             df.groupby("row_idx")[["predicted_score"]].max(),
             on="row_idx",

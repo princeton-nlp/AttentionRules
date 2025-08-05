@@ -1,0 +1,8 @@
+*.pyc
+*~
+*#
+build/*
+data/*
+output/*
+slurm/*
+src.egg-info/*

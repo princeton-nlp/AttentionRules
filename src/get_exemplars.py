@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--split_type", type=str, default="bins")
     parser.add_argument("--num_bins", type=int, default=5)
     parser.add_argument("--examples_per_bin", type=int, default=10)
+    parser.add_argument("--uniform_sample", type=int, default=0)
 
     # SAEs
     parser.add_argument("--layer", type=int, default=0)
@@ -141,6 +142,13 @@ def run_get_examples(args):
     if args.num_bins == 2:
         logger.info(f"num_bins == 2, getting positive and negative examples")
     for feat in tqdm(features):
+        if args.num_bins == 2 and args.uniform_sample:
+            binned_df, _ = data_utils.sample_positive_and_negative_examples(
+                activation_df.query(f"feature == {feat}").copy(deep=True),
+                examples_per_bin=args.examples_per_bin * 3,
+                max_length=args.max_length,
+                seed=args.data_seed,
+            )
         if args.num_bins == 2:
             binned_df, _ = data_utils.get_positive_and_negative_examples(
                 activation_df.query(f"feature == {feat}").copy(deep=True),
